@@ -48,17 +48,20 @@ function subDays(ds,n){const d=new Date(ds+"T12:00:00");d.setDate(d.getDate()-n)
 function reminderMos(n){return n<=3?3:n<=6?4:n<=9?5:6;}
 function getHolTasks(h){
   const mo=reminderMos(calDays(h.start,h.end));
-  return[
+  const tasks=[];
+  // Request holiday reminder only if entitlement is used
+  if(h.days>0){
+    const reqMo=h.days<=5?1:2;
+    tasks.push({id:'request',icon:'📨',label:`Request holiday from employer`,subLabel:`(${reqMo} month${reqMo>1?"s":""} before departure — ${h.days} working day${h.days!==1?"s":""})`,due:subMos(h.start,reqMo)});
+  }
+  tasks.push(
     {id:'book',icon:'🏨',label:`Book accommodation, transportation & flights`,subLabel:`(${mo} months before departure)`,due:subMos(h.start,mo)},
     {id:'plan',icon:'📋',label:'Detailed planning',subLabel:'(1 month before departure)',due:subMos(h.start,1)},
     {id:'check',icon:'✅',label:'Final check — confirm all plans',subLabel:'(1 week before departure)',due:subDays(h.start,7)},
-  ];
+  );
+  return tasks;
 }
-function getItinDays(h){
-  const n=calDays(h.start,h.end),days=[];
-  for(let i=0;i<n;i++){const d=new Date(h.start+"T12:00:00");d.setDate(d.getDate()+i);days.push({idx:i,date:tds(d)});}
-  return days;
-}
+function getItinDays(h){const n=calDays(h.start,h.end),days=[];for(let i=0;i<n;i++){const d=new Date(h.start+"T12:00:00");d.setDate(d.getDate()+i);days.push({idx:i,date:tds(d)});}return days;}
 function fmtDate(s){if(!s)return"";const[y,m,d]=s.split("-");return new Date(+y,+m-1,+d).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"});}
 function daysUntil(ds,todayStr){return Math.round((new Date(ds+"T12:00:00")-new Date(todayStr+"T12:00:00"))/86400000);}
 
@@ -103,8 +106,7 @@ export default function App(){
   const bookedDays=(pid,yr)=>D(pid,yr).holidays.reduce((s,h)=>s+h.days,0);
   const usedDays=(pid,yr)=>D(pid,yr).initUsed+bookedDays(pid,yr);
   const projCO=(person,yr)=>{const d=D(person.id,yr);const co=d.coSet?d.carryover:0;return Math.max(0,person.allowance+co-usedDays(person.id,yr));};
-  const effAll=(person,yr,overrideCO)=>{const co=overrideCO!==undefined?overrideCO:D(person.id,yr).carryover;return person.allowance+co;};
-  const remDays=(person,yr,co)=>effAll(person,yr,co)-usedDays(person.id,yr);
+  const remDays=(person,yr,co)=>(person.allowance+(co!==undefined?co:D(person.id,yr).carryover))-usedDays(person.id,yr);
 
   function getAllHolidays(){
     const map={};
@@ -114,10 +116,25 @@ export default function App(){
       if(!person||!v.holidays)continue;
       for(const h of v.holidays){
         if(!map[h.id])map[h.id]={...h,persons:[person],personLabel:person.label,personColor:person.color};
-        else{if(!map[h.id].persons.find(p=>p.id===pid)){map[h.id].persons.push(person);map[h.id].personLabel="Both";map[h.id].personColor="#7c3aed";}}
+        else if(!map[h.id].persons.find(p=>p.id===pid)){map[h.id].persons.push(person);map[h.id].personLabel="Both";map[h.id].personColor="#7c3aed";}
       }
     }
     return Object.values(map).sort((a,b)=>a.start.localeCompare(b.start));
+  }
+
+  // Returns [{person, holiday}] for all holidays on a given date
+  function holsOn(ds){
+    const res=[];
+    for(const p of PEOPLE){
+      for(const[k,v]of Object.entries(data)){
+        if(!k.startsWith(p.id+"-"))continue;
+        for(const h of(v.holidays||[])){
+          if(ds>=h.start&&ds<=h.end&&!res.find(r=>r.holiday.id===h.id&&r.person.id===p.id))
+            res.push({person:p,holiday:h});
+        }
+      }
+    }
+    return res;
   }
 
   function updateKey(k,updates){
@@ -141,7 +158,7 @@ export default function App(){
     if(end<start)return setFormError("End must be after start.");
     const days=countWD(start,end);
     if(person==="BOTH"){
-      for(const p of PEOPLE){const by=getBaseYear(p,new Date(start+"T12:00:00"));const co=D(p.id,by).coSet?D(p.id,by).carryover:0;const rem=remDays(p,by,co);if(days>rem)return setFormError(`Only ${rem} days remaining for ${p.label} (${yearLabel(p,by)}).`);}
+      for(const p of PEOPLE){const by=getBaseYear(p,new Date(start+"T12:00:00"));const co=D(p.id,by).coSet?D(p.id,by).carryover:0;const rem=remDays(p,by,co);if(days>0&&days>rem)return setFormError(`Only ${rem} days remaining for ${p.label} (${yearLabel(p,by)}).`);}
       const id=Date.now();
       for(const p of PEOPLE){const by=getBaseYear(p,new Date(start+"T12:00:00"));updateKey(sKey(p.id,by),{holidays:[...D(p.id,by).holidays,{id,start,end,label:label||"Holiday",days,joint:true}]});}
     } else {
@@ -149,12 +166,13 @@ export default function App(){
       const by=getBaseYear(p,new Date(start+"T12:00:00"));
       const co=D(p.id,by).coSet?D(p.id,by).carryover:0;
       const rem=remDays(p,by,co);
-      if(days>rem)return setFormError(`Only ${rem} days remaining for ${p.label} (${yearLabel(p,by)}).`);
+      if(days>0&&days>rem)return setFormError(`Only ${rem} days remaining for ${p.label} (${yearLabel(p,by)}).`);
       updateKey(sKey(p.id,by),{holidays:[...D(p.id,by).holidays,{id:Date.now(),start,end,label:label||"Holiday",days}]});
     }
     setForm(f=>({...f,start:"",end:"",label:""}));
     setView("dashboard");
   }
+
   function removeHoliday(pid,yr,id){updateKey(sKey(pid,yr),{holidays:D(pid,yr).holidays.filter(h=>h.id!==id)});}
   function addEvent(){
     setEvtError("");
@@ -231,8 +249,8 @@ export default function App(){
         {hols.map(h=>(
           <div key={h.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 12px",borderRadius:8,background:bgColor,marginBottom:6}}>
             <div>
-              <div style={{fontWeight:600,fontSize:14,color:"#1e293b"}}>{h.label}{h.joint&&<span style={{marginLeft:6,fontSize:11,background:"#f5f3ff",color:"#7c3aed",borderRadius:4,padding:"1px 6px",fontWeight:600}}>Joint</span>}</div>
-              <div style={{fontSize:12,color:"#64748b"}}>{fmtDate(h.start)} – {fmtDate(h.end)} · <strong>{h.days}</strong> working day{h.days!==1?"s":""}</div>
+              <div style={{fontWeight:600,fontSize:14,color:"#1e293b"}}>{h.label}{h.joint&&<span style={{marginLeft:6,fontSize:11,background:"#f5f3ff",color:"#7c3aed",borderRadius:4,padding:"1px 6px",fontWeight:600}}>Joint</span>}{h.days===0&&<span style={{marginLeft:6,fontSize:11,background:"#f0fdf4",color:"#16a34a",borderRadius:4,padding:"1px 6px",fontWeight:600}}>🏖️ No entitlement</span>}</div>
+              <div style={{fontSize:12,color:"#64748b"}}>{fmtDate(h.start)} – {fmtDate(h.end)} · {h.days>0?<><strong>{h.days}</strong> working day{h.days!==1?"s":""}</>:"weekends/bank holidays only"}</div>
             </div>
             <button onClick={()=>removeHoliday(pid,yr,h.id)} style={{background:"none",border:"1px solid #e2e8f0",borderRadius:6,padding:"4px 10px",cursor:"pointer",color:"#94a3b8",fontSize:12}}>Remove</button>
           </div>
@@ -241,16 +259,15 @@ export default function App(){
     );
   }
 
-  // ── Calendar helpers ──────────────────────────────────────────────────────────
+  // ── Calendar ─────────────────────────────────────────────────────────────────
   const getDIM=(y,m)=>new Date(y,m+1,0).getDate();
   const getFD=(y,m)=>{const d=new Date(y,m,1).getDay();return d===0?6:d-1;};
-  const holPeople=ds=>PEOPLE.filter(p=>Object.keys(data).some(k=>k.startsWith(p.id+"-")&&(data[k].holidays||[]).some(h=>ds>=h.start&&ds<=h.end)));
   const eventsOn=ds=>events.filter(e=>e.date===ds);
 
   // ── Add holiday preview ───────────────────────────────────────────────────────
   const prevDays=form.start&&form.end&&form.end>=form.start?countWD(form.start,form.end):0;
   function getPreviewInfo(){
-    if(!form.start||!form.end||form.end<form.start||!prevDays)return null;
+    if(!form.start||!form.end||form.end<form.start)return null;
     if(form.person==="BOTH"){
       return{isBoth:true,days:prevDays,infos:PEOPLE.map(p=>{
         const by=getBaseYear(p,new Date(form.start+"T12:00:00"));
@@ -271,7 +288,6 @@ export default function App(){
 
   return(
     <div style={{fontFamily:"system-ui,sans-serif",minHeight:"100vh",background:"#f8fafc"}}>
-      {/* Header */}
       <div style={{background:"linear-gradient(135deg,#6366f1 0%,#ec4899 100%)",padding:"20px 24px 0",color:"white"}}>
         <div style={{maxWidth:900,margin:"0 auto"}}>
           <div style={{marginBottom:16}}>
@@ -336,15 +352,30 @@ export default function App(){
                 {DAYS.map(d=><div key={d} style={{padding:"10px 0",textAlign:"center",fontSize:12,fontWeight:700,color:"#94a3b8"}}>{d}</div>)}
               </div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)"}}>
-                {Array.from({length:getFD(calYear,calMonth)}).map((_,i)=><div key={`e${i}`} style={{minHeight:68,borderTop:"1px solid #f1f5f9"}}/>)}
+                {Array.from({length:getFD(calYear,calMonth)}).map((_,i)=><div key={`e${i}`} style={{minHeight:72,borderTop:"1px solid #f1f5f9"}}/>)}
                 {Array.from({length:getDIM(calYear,calMonth)}).map((_,i)=>{
                   const d=i+1,ds=`${calYear}-${String(calMonth+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-                  const isToday=ds===todayStr,weekend=isWeekend(ds),bhn=bhName(ds),people=holPeople(ds),dayEvts=eventsOn(ds);
+                  const isToday=ds===todayStr,weekend=isWeekend(ds),bhn=bhName(ds);
+                  const dayHols=holsOn(ds),dayEvts=eventsOn(ds);
+                  // Deduplicate by holiday id for display (joint hols appear once per person, show label once with both initials)
+                  const holMap={};
+                  for(const{person,holiday}of dayHols){
+                    if(!holMap[holiday.id])holMap[holiday.id]={holiday,persons:[person]};
+                    else holMap[holiday.id].persons.push(person);
+                  }
                   return(
-                    <div key={d} style={{minHeight:68,borderTop:"1px solid #f1f5f9",padding:4,background:isToday?"#fffbeb":bhn?"#fffdf5":weekend?"#fafafa":"white"}}>
+                    <div key={d} style={{minHeight:72,borderTop:"1px solid #f1f5f9",padding:4,background:isToday?"#fffbeb":bhn?"#fffdf5":weekend?"#fafafa":"white"}}>
                       <div style={{fontSize:12,fontWeight:isToday?800:400,color:isToday?"#f59e0b":bhn?"#d97706":weekend?"#cbd5e1":"#334155",marginBottom:2}}>{d}</div>
                       {bhn&&<div style={{background:"#fbbf24",color:"white",borderRadius:4,fontSize:9,fontWeight:700,padding:"1px 4px",marginBottom:2,lineHeight:1.3,wordBreak:"break-word"}}>{bhn}</div>}
-                      {people.map(p=><div key={p.id} style={{background:p.color,color:"white",borderRadius:4,fontSize:10,fontWeight:700,padding:"1px 4px",marginBottom:2}}>{p.id}</div>)}
+                      {Object.values(holMap).map(({holiday:h,persons})=>{
+                        const color=persons.length>1?"#7c3aed":persons[0].color;
+                        const initials=persons.map(p=>p.id).join("+");
+                        return(
+                          <div key={h.id} title={h.label} style={{background:color,color:"white",borderRadius:4,fontSize:9,fontWeight:600,padding:"1px 5px",marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                            <span style={{opacity:0.85,fontSize:8}}>{initials} · </span>{h.label}
+                          </div>
+                        );
+                      })}
                       {dayEvts.map(ev=>{const c=EVENT_COLORS.find(x=>x.id===ev.color)||EVENT_COLORS[0];return<div key={ev.id} style={{background:c.hex,color:"white",borderRadius:4,fontSize:9,fontWeight:600,padding:"1px 4px",marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={ev.title}>{ev.title}</div>;})}
                     </div>
                   );
@@ -380,20 +411,20 @@ export default function App(){
               <div key={h.id} style={{background:"white",borderRadius:14,padding:20,marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,0.07)",borderLeft:`4px solid ${h.personColor}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14,flexWrap:"wrap",gap:8}}>
                   <div>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                       <span style={{fontWeight:700,fontSize:16,color:"#1e293b"}}>{h.label}</span>
-                      {h.personLabel==="Both"?<span style={{fontSize:11,background:"#f5f3ff",color:"#7c3aed",borderRadius:4,padding:"2px 8px",fontWeight:600}}>MK & SL</span>:<span style={{fontSize:11,background:"#f8fafc",color:h.personColor,borderRadius:4,padding:"2px 8px",fontWeight:600,border:`1px solid ${h.personColor}33`}}>{h.personLabel}</span>}
+                      {h.personLabel==="Both"?<span style={{fontSize:11,background:"#f5f3ff",color:"#7c3aed",borderRadius:4,padding:"2px 8px",fontWeight:600}}>MK & SL</span>:<span style={{fontSize:11,color:h.personColor,borderRadius:4,padding:"2px 8px",fontWeight:600,border:`1px solid ${h.personColor}33`}}>{h.personLabel}</span>}
                       {isActive&&<span style={{fontSize:11,background:"#dcfce7",color:"#16a34a",borderRadius:4,padding:"2px 8px",fontWeight:600}}>🟢 Ongoing</span>}
+                      {h.days===0&&<span style={{fontSize:11,background:"#f0fdf4",color:"#16a34a",borderRadius:4,padding:"2px 8px",fontWeight:600}}>🏖️ No entitlement</span>}
                     </div>
-                    <div style={{fontSize:13,color:"#64748b",marginTop:4}}>{fmtDate(h.start)} – {fmtDate(h.end)} · {cd} calendar day{cd!==1?"s":""} · {h.days} working day{h.days!==1?"s":""}</div>
+                    <div style={{fontSize:13,color:"#64748b",marginTop:4}}>{fmtDate(h.start)} – {fmtDate(h.end)} · {cd} calendar day{cd!==1?"s":""}{h.days>0?` · ${h.days} working day${h.days!==1?"s":""} used`:""}</div>
                   </div>
-                  {!isActive&&du>0&&<div style={{textAlign:"right",fontSize:12,color:"#94a3b8"}}><div style={{fontWeight:700,color:"#f59e0b",fontSize:14}}>{du} days to go</div></div>}
+                  {!isActive&&du>0&&<div style={{fontSize:12,color:"#94a3b8"}}><div style={{fontWeight:700,color:"#f59e0b",fontSize:14}}>{du} days to go</div></div>}
                 </div>
-                <div style={{fontSize:11,color:"#94a3b8",marginBottom:10}}>Reminders based on {cd}-day trip ({reminderMos(cd)} months, 1 month, 1 week before)</div>
                 {tasks.map(task=>{
                   const done=!!(todos[h.id]?.[task.id]);
                   const overdue=!done&&task.due<todayStr;
-                  const daysToTask=daysUntil(task.due,todayStr);
+                  const dtu=daysUntil(task.due,todayStr);
                   return(
                     <div key={task.id} onClick={()=>toggleTodo(h.id,task.id)} style={{display:"flex",alignItems:"flex-start",gap:12,padding:"10px 12px",borderRadius:10,marginBottom:8,cursor:"pointer",background:done?"#f0fdf4":overdue?"#fef2f2":"#f8fafc",border:`1px solid ${done?"#bbf7d0":overdue?"#fecaca":"#e2e8f0"}`,transition:"all 0.15s"}}>
                       <div style={{width:20,height:20,borderRadius:5,border:`2px solid ${done?"#22c55e":overdue?"#ef4444":"#cbd5e1"}`,background:done?"#22c55e":"white",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>
@@ -401,10 +432,8 @@ export default function App(){
                       </div>
                       <div style={{flex:1}}>
                         <div style={{fontWeight:600,fontSize:14,color:"#1e293b",textDecoration:done?"line-through":"none",opacity:done?0.6:1}}>{task.icon} {task.label}</div>
-                        <div style={{fontSize:12,color:done?"#94a3b8":overdue?"#ef4444":daysToTask<=14?"#f59e0b":"#64748b",marginTop:2}}>
-                          Due: {fmtDate(task.due)} {task.subLabel}
-                          {!done&&overdue&&" · ⚠️ Overdue"}
-                          {!done&&!overdue&&daysToTask<=14&&` · ${daysToTask} days left`}
+                        <div style={{fontSize:12,color:done?"#94a3b8":overdue?"#ef4444":dtu<=14?"#f59e0b":"#64748b",marginTop:2}}>
+                          Due: {fmtDate(task.due)} {task.subLabel}{!done&&overdue?" · ⚠️ Overdue":""}{!done&&!overdue&&dtu<=14?` · ${dtu} days left`:""}
                         </div>
                       </div>
                     </div>
@@ -416,14 +445,14 @@ export default function App(){
           return(
             <div>
               <h2 style={{margin:"0 0 20px",fontSize:20,fontWeight:700,color:"#1e293b"}}>📋 Holiday To-do</h2>
-              {upcoming.length===0&&past.length===0&&<p style={{color:"#94a3b8"}}>No holidays added yet. Add holidays to see your planning to-dos.</p>}
+              {upcoming.length===0&&past.length===0&&<p style={{color:"#94a3b8"}}>No holidays added yet.</p>}
               {upcoming.length>0&&<><div style={{fontSize:12,fontWeight:700,color:"#64748b",marginBottom:12,letterSpacing:"0.05em"}}>UPCOMING & ONGOING</div>{upcoming.map(renderHolTodo)}</>}
               {past.length>0&&<><div style={{fontSize:12,fontWeight:700,color:"#94a3b8",marginBottom:12,marginTop:20,letterSpacing:"0.05em"}}>PAST TRIPS</div>{past.map(renderHolTodo)}</>}
             </div>
           );
         })()}
 
-        {/* ── ITINERARY / REMINDERS ── */}
+        {/* ── ITINERARY ── */}
         {view==="reminders"&&(()=>{
           const allHols=getAllHolidays();
           const upcoming=allHols.filter(h=>h.end>=todayStr);
@@ -467,7 +496,7 @@ export default function App(){
                           </div>
                           <div>
                             <label style={{display:"block",fontSize:11,fontWeight:600,color:"#94a3b8",marginBottom:3}}>DETAILS</label>
-                            <textarea value={day.details||""} onChange={e=>updateItinDay(h.id,idx,"details",e.target.value)} placeholder="Enter notes, activities, bookings…" rows={2}
+                            <textarea value={day.details||""} onChange={e=>updateItinDay(h.id,idx,"details",e.target.value)} placeholder="Notes, activities, bookings…" rows={2}
                               style={{width:"100%",padding:"7px 10px",border:"1px solid #e2e8f0",borderRadius:7,fontSize:13,boxSizing:"border-box",resize:"vertical",outline:"none"}}/>
                           </div>
                         </div>
@@ -481,7 +510,7 @@ export default function App(){
           return(
             <div>
               <h2 style={{margin:"0 0 20px",fontSize:20,fontWeight:700,color:"#1e293b"}}>🗺️ Itinerary Planner</h2>
-              {upcoming.length===0&&past.length===0&&<p style={{color:"#94a3b8"}}>No holidays added yet. Add holidays to start planning your itinerary.</p>}
+              {upcoming.length===0&&past.length===0&&<p style={{color:"#94a3b8"}}>No holidays added yet.</p>}
               {upcoming.length>0&&<><div style={{fontSize:12,fontWeight:700,color:"#64748b",marginBottom:12,letterSpacing:"0.05em"}}>UPCOMING & ONGOING</div>{upcoming.map(renderHolItin)}</>}
               {past.length>0&&<><div style={{fontSize:12,fontWeight:700,color:"#94a3b8",marginBottom:12,marginTop:20,letterSpacing:"0.05em"}}>PAST TRIPS</div>{past.map(renderHolItin)}</>}
             </div>
@@ -523,12 +552,12 @@ export default function App(){
               <div style={{marginBottom:16}}>
                 <div style={{background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:8,padding:"10px 14px",marginBottom:8,fontSize:13,color:"#0369a1"}}>
                   📅 <strong>{preview.days}</strong> working day{preview.days!==1?"s":""} used &nbsp;·&nbsp; {calDays(form.start,form.end)} calendar day{calDays(form.start,form.end)!==1?"s":""}
-                  {preview.days===0&&<span style={{marginLeft:8,background:"#e0f2fe",borderRadius:4,padding:"1px 7px",fontSize:12,color:"#0369a1",fontWeight:600}}>🏖️ No entitlement used</span>}
+                  {preview.days===0&&<span style={{marginLeft:8,background:"#e0f2fe",borderRadius:4,padding:"1px 7px",fontSize:12,fontWeight:600}}>🏖️ No entitlement used</span>}
                 </div>
                 {preview.isBoth?preview.infos.map(info=>(
-                  <div key={info.person.id} style={{background:info.after<0?"#fef2f2":"#f0fdf4",border:`1px solid ${info.after<0?"#fecaca":"#bbf7d0"}`,borderRadius:8,padding:"8px 14px",marginBottom:6,fontSize:13,color:info.after<0?"#b91c1c":"#166534",display:"flex",justifyContent:"space-between"}}>
+                  preview.days>0&&<div key={info.person.id} style={{background:info.after<0?"#fef2f2":"#f0fdf4",border:`1px solid ${info.after<0?"#fecaca":"#bbf7d0"}`,borderRadius:8,padding:"8px 14px",marginBottom:6,fontSize:13,color:info.after<0?"#b91c1c":"#166534",display:"flex",justifyContent:"space-between"}}>
                     <span><strong>{info.person.label}</strong>: {info.rem} remaining → <strong>{Math.max(0,info.after)} after</strong></span>
-                    <span style={{fontSize:11,opacity:0.8}}>{preview.days===0?"No entitlement used":yearLabel(info.person,info.by)}</span>
+                    <span style={{fontSize:11,opacity:0.8}}>{yearLabel(info.person,info.by)}</span>
                   </div>
                 )):(preview.days>0&&(
                   <div style={{background:preview.after<0?"#fef2f2":"#f0fdf4",border:`1px solid ${preview.after<0?"#fecaca":"#bbf7d0"}`,borderRadius:8,padding:"8px 14px",fontSize:13,color:preview.after<0?"#b91c1c":"#166534",display:"flex",justifyContent:"space-between"}}>

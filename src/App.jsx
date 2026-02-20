@@ -76,7 +76,7 @@ export default function App(){
   const today=new Date(),todayStr=tds(today),beforeApril=today.getMonth()<3;
   const mkP=PEOPLE[0],slP=PEOPLE[1];
   const mkCurYear=getBaseYear(mkP,today),mkYears=beforeApril?[mkCurYear,mkCurYear+1]:[mkCurYear];
-  const slCurYear=getBaseYear(slP,today);
+  const slCurYear=getBaseYear(slP,today),slYears=[slCurYear,slCurYear+1];
 
   const[view,setView]=useState("dashboard");
   const[data,setData]=useState({});
@@ -105,8 +105,15 @@ export default function App(){
   const D=(pid,yr)=>data[sKey(pid,yr)]||{holidays:[],carryover:0,coSet:false,initUsed:0,initSet:false};
   const bookedDays=(pid,yr)=>D(pid,yr).holidays.reduce((s,h)=>s+h.days,0);
   const usedDays=(pid,yr)=>D(pid,yr).initUsed+bookedDays(pid,yr);
-  const projCO=(person,yr)=>{const d=D(person.id,yr);const co=d.coSet?d.carryover:0;return Math.max(0,person.allowance+co-usedDays(person.id,yr));};
-  const remDays=(person,yr)=>(person.allowance+D(person.id,yr).carryover)-usedDays(person.id,yr);
+  // If carry over hasn't been explicitly set for a year, project it from the previous year's remaining days
+  const effectiveCO=(person,yr)=>{
+    const d=D(person.id,yr);
+    if(d.coSet)return d.carryover;
+    const prevD=D(person.id,yr-1);
+    const prevCO=prevD.coSet?prevD.carryover:0;
+    return Math.max(0,person.allowance+prevCO-usedDays(person.id,yr-1));
+  };
+  const remDays=(person,yr)=>(person.allowance+effectiveCO(person,yr))-usedDays(person.id,yr);
 
   function getAllHolidays(){
     const map={};
@@ -187,7 +194,7 @@ export default function App(){
   // ── Card ─────────────────────────────────────────────────────────────────────
   function card(person,baseYear,isNext){
     const k=sKey(person.id,baseYear),d=D(person.id,baseYear);
-    const co=isNext&&!d.coSet?projCO(mkP,mkCurYear):d.carryover;
+    const co=effectiveCO(person,baseYear);
     const eff=person.allowance+co,u=usedDays(person.id,baseYear),rem=eff-u,pct=Math.min(100,(u/eff)*100);
     return(
       <div key={k} style={{background:"white",borderRadius:16,padding:20,boxShadow:"0 1px 4px rgba(0,0,0,0.07)",borderTop:`4px solid ${person.color}`}}>
@@ -229,7 +236,7 @@ export default function App(){
             </div>
           ):(
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{color:"#64748b"}}><span style={{fontWeight:600}}>Carry over: </span><span style={{color:person.color,fontWeight:700}}>{co} days</span>{isNext&&!d.coSet&&<span style={{color:"#94a3b8",fontStyle:"italic",marginLeft:4}}>(projected)</span>}</div>
+              <div style={{color:"#64748b"}}><span style={{fontWeight:600}}>Carry over: </span><span style={{color:person.color,fontWeight:700}}>{co} days</span>{!d.coSet&&co>0&&<span style={{color:"#94a3b8",fontStyle:"italic",marginLeft:4}}>(projected)</span>}</div>
               <button onClick={()=>{setEditCO(k);setCOInput(co);setEditRem(null);}} style={{background:"none",border:"1px solid #cbd5e1",borderRadius:6,padding:"2px 8px",cursor:"pointer",color:"#64748b",fontSize:11}}>✏️ Edit</button>
             </div>
           )}
@@ -320,11 +327,13 @@ export default function App(){
             <div>
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
                 <div style={{width:4,height:18,borderRadius:2,background:"#ec4899"}}/>
-                <h3 style={{margin:0,fontSize:14,fontWeight:700,color:"#ec4899"}}>SL · Current holiday year</h3>
+                <h3 style={{margin:0,fontSize:14,fontWeight:700,color:"#ec4899"}}>SL · Current & upcoming holiday years</h3>
               </div>
-              <div style={{marginBottom:14}}>{card(slP,slCurYear,false)}</div>
-              {holidayList("SL",slCurYear,"#fdf2f8")}
-              {D("SL",slCurYear).holidays.length===0&&<p style={{margin:0,color:"#94a3b8",fontSize:13}}>No holidays added yet for SL.</p>}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:14}}>
+                {slYears.map((yr,i)=>card(slP,yr,i>0))}
+              </div>
+              {slYears.map(yr=>holidayList("SL",yr,"#fdf2f8"))}
+              {slYears.every(yr=>D("SL",yr).holidays.length===0)&&<p style={{margin:0,color:"#94a3b8",fontSize:13}}>No holidays added yet for SL.</p>}
             </div>
           </div>
         )}

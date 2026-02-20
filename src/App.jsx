@@ -106,7 +106,7 @@ export default function App(){
   const bookedDays=(pid,yr)=>D(pid,yr).holidays.reduce((s,h)=>s+h.days,0);
   const usedDays=(pid,yr)=>D(pid,yr).initUsed+bookedDays(pid,yr);
   const projCO=(person,yr)=>{const d=D(person.id,yr);const co=d.coSet?d.carryover:0;return Math.max(0,person.allowance+co-usedDays(person.id,yr));};
-  const remDays=(person,yr,co)=>(person.allowance+(co!==undefined?co:D(person.id,yr).carryover))-usedDays(person.id,yr);
+  const remDays=(person,yr)=>(person.allowance+D(person.id,yr).carryover)-usedDays(person.id,yr);
 
   function getAllHolidays(){
     const map={};
@@ -143,7 +143,7 @@ export default function App(){
   function saveCarryover(k){updateKey(k,{carryover:Math.max(0,parseInt(coInput)||0),coSet:true});setEditCO(null);}
   function saveInitRem(k,person,baseYear){
     const entered=Math.max(0,parseInt(remInput)||0);
-    const co=D(person.id,baseYear).coSet?D(person.id,baseYear).carryover:0;
+    const co=D(person.id,baseYear).carryover;
     const booked=bookedDays(person.id,baseYear);
     updateKey(k,{initUsed:Math.max(0,person.allowance+co-entered-booked),initSet:true});
     setEditRem(null);
@@ -158,14 +158,13 @@ export default function App(){
     if(end<start)return setFormError("End must be after start.");
     const days=countWD(start,end);
     if(person==="BOTH"){
-      for(const p of PEOPLE){const by=getBaseYear(p,new Date(start+"T12:00:00"));const co=D(p.id,by).coSet?D(p.id,by).carryover:0;const rem=remDays(p,by,co);if(days>0&&days>rem)return setFormError(`Only ${rem} days remaining for ${p.label} (${yearLabel(p,by)}).`);}
+      for(const p of PEOPLE){const by=getBaseYear(p,new Date(start+"T12:00:00"));const rem=remDays(p,by);if(days>0&&days>rem)return setFormError(`Only ${rem} days remaining for ${p.label} (${yearLabel(p,by)}).`);}
       const id=Date.now();
       for(const p of PEOPLE){const by=getBaseYear(p,new Date(start+"T12:00:00"));updateKey(sKey(p.id,by),{holidays:[...D(p.id,by).holidays,{id,start,end,label:label||"Holiday",days,joint:true}]});}
     } else {
       const p=PEOPLE.find(x=>x.id===person);
       const by=getBaseYear(p,new Date(start+"T12:00:00"));
-      const co=D(p.id,by).coSet?D(p.id,by).carryover:0;
-      const rem=remDays(p,by,co);
+      const rem=remDays(p,by);
       if(days>0&&days>rem)return setFormError(`Only ${rem} days remaining for ${p.label} (${yearLabel(p,by)}).`);
       updateKey(sKey(p.id,by),{holidays:[...D(p.id,by).holidays,{id:Date.now(),start,end,label:label||"Holiday",days}]});
     }
@@ -271,15 +270,13 @@ export default function App(){
     if(form.person==="BOTH"){
       return{isBoth:true,days:prevDays,infos:PEOPLE.map(p=>{
         const by=getBaseYear(p,new Date(form.start+"T12:00:00"));
-        const co=D(p.id,by).coSet?D(p.id,by).carryover:0;
-        const rem=remDays(p,by,co);
+        const rem=remDays(p,by);
         return{person:p,by,rem,after:rem-prevDays};
       })};
     }
     const p=PEOPLE.find(x=>x.id===form.person);
     const by=getBaseYear(p,new Date(form.start+"T12:00:00"));
-    const co=D(p.id,by).coSet?D(p.id,by).carryover:0;
-    const rem=remDays(p,by,co);
+    const rem=remDays(p,by);
     return{isBoth:false,days:prevDays,person:p,by,rem,after:rem-prevDays};
   }
   const preview=getPreviewInfo();

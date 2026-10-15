@@ -8,6 +8,7 @@ const PERSON_OPTIONS = [...PEOPLE, { id:"BOTH", label:"Both MK & SL", color:"#7c
 const MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DAYS=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const EVENT_COLORS=[{id:"red",hex:"#ef4444"},{id:"orange",hex:"#f97316"},{id:"teal",hex:"#14b8a6"},{id:"green",hex:"#22c55e"},{id:"sky",hex:"#0ea5e9"},{id:"rose",hex:"#f43f5e"}];
+const EMPTY_FORM={person:"MK",start:"",end:"",label:"",startType:"full",endType:"full",ovr:{MK:"",SL:""}};
 
 // ── UK Bank Holidays ─────────────────────────────────────────────────────────
 function easterSunday(y){const a=y%19,b=Math.floor(y/100),c=y%100,d=Math.floor(b/4),e=b%4,f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3),h=(19*a+b-d-g+15)%30,i=Math.floor(c/4),k=c%4,l=(32+2*e+2*i-h-k)%7,m=Math.floor((a+11*h+22*l)/451),mo=Math.floor((h+l-7*m+114)/31),da=((h+l-7*m+114)%31)+1;return new Date(y,mo-1,da);}
@@ -124,18 +125,20 @@ const selStyle={width:"100%",padding:"10px 8px",border:"1px solid #e2e8f0",borde
 
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App(){
-  const today=new Date(),todayStr=tds(today),beforeApril=today.getMonth()<3;
+  const today=new Date(),todayStr=tds(today);
   const mkP=PEOPLE[0],slP=PEOPLE[1];
-  const mkCurYear=getBaseYear(mkP,today),mkYears=beforeApril?[mkCurYear,mkCurYear+1]:[mkCurYear];
-  const slCurYear=getBaseYear(slP,today),slYears=[slCurYear,slCurYear+1];
+  const mkCurYear=getBaseYear(mkP,today);
+  const slCurYear=getBaseYear(slP,today);
 
   const[view,setView]=useState("dashboard");
+  const[dashYear,setDashYear]=useState("current");
   const[data,setData]=useState({});
   const[events,setEvents]=useState([]);
   const[todos,setTodos]=useState({});
   const[editCO,setEditCO]=useState(null);const[coInput,setCOInput]=useState("");
   const[editRem,setEditRem]=useState(null);const[remInput,setRemInput]=useState("");
-  const[form,setForm]=useState({person:"MK",start:"",end:"",label:"",startType:"full",endType:"full",ovr:{MK:"",SL:""}});
+  const[form,setForm]=useState(EMPTY_FORM);
+  const[editingId,setEditingId]=useState(null);
   const[formError,setFormError]=useState("");
   const[evtForm,setEvtForm]=useState({date:"",title:"",color:"red"});
   const[evtError,setEvtError]=useState("");
@@ -161,6 +164,19 @@ export default function App(){
     return Math.max(0,person.allowance+prevCO-usedDays(person.id,yr-1));
   };
   const remDays=(person,yr)=>(person.allowance+effectiveCO(person,yr))-usedDays(person.id,yr);
+
+  // All stored records (one per person) for a given holiday id
+  function findRecords(id){
+    const recs=[];
+    for(const[k,v]of Object.entries(data)){
+      const[pid,yrStr]=k.split("-");
+      const person=PEOPLE.find(p=>p.id===pid);
+      if(!person)continue;
+      const h=(v.holidays||[]).find(x=>x.id===id);
+      if(h)recs.push({person,yr:+yrStr,holiday:h});
+    }
+    return recs;
+  }
 
   function getAllHolidays(){
     const map={};
@@ -203,21 +219,44 @@ export default function App(){
   }
   function toggleTodo(hid,taskId){const u={...todos,[hid]:{...(todos[hid]||{}),[taskId]:!(todos[hid]?.[taskId])}};setTodos(u);lsSet("todos",u);}
 
+  // ── Navigation / edit mode ──
+  function goView(v){
+    if(editingId!==null&&v!=="add"){setEditingId(null);setForm(EMPTY_FORM);setFormError("");}
+    setView(v);
+  }
+  function startEdit(h){
+    const recs=findRecords(h.id);
+    const base=recs[0]?.holiday||h;
+    const ovr={MK:"",SL:""};
+    for(const r of recs){if(r.holiday.manual)ovr[r.person.id]=String(r.holiday.days);}
+    const person=recs.length>1?"BOTH":(recs[0]?.person.id||"MK");
+    setForm({person,start:base.start,end:base.end,label:base.label,startType:base.startType||"full",endType:base.endType||"full",ovr});
+    setFormError("");
+    setEditingId(h.id);
+    setView("add");
+  }
+  function cancelEdit(){
+    setEditingId(null);setForm(EMPTY_FORM);setFormError("");setView("dashboard");
+  }
+
   // ── Form derived values ──
   const types=normTypes(form.start,form.end,form.startType,form.endType);
   const isSingle=!!(form.start&&form.end&&form.start===form.end);
   const datesOk=!!(form.start&&form.end&&form.end>=form.start);
   const autoDays=datesOk?countWD(form.start,form.end,types.st,types.et):0;
   const formTargets=form.person==="BOTH"?PEOPLE:[PEOPLE.find(p=>p.id===form.person)];
+  const editRecs=editingId!==null?findRecords(editingId):[];
   const preview=datesOk?{auto:autoDays,infos:formTargets.map(p=>{
     const by=getBaseYear(p,new Date(form.start+"T12:00:00"));
     const o=parseOvr(form.ovr[p.id]);
     const charged=o.valid&&o.value!==null?o.value:autoDays;
-    const rem=remDays(p,by);
+    const old=editRecs.find(r=>r.person.id===p.id);
+    const own=old&&old.yr===by?old.holiday.days:0;
+    const rem=remDays(p,by)+own;
     return{person:p,by,o,charged,rem,after:rem-charged};
   })}:null;
 
-  function addHoliday(){
+  function submitHoliday(){
     setFormError("");
     const{person,start,end,label}=form;
     if(!start||!end)return setFormError("Please select start and end dates.");
@@ -225,21 +264,31 @@ export default function App(){
     const{st,et}=normTypes(start,end,form.startType,form.endType);
     const auto=countWD(start,end,st,et);
     const targets=person==="BOTH"?PEOPLE:[PEOPLE.find(x=>x.id===person)];
+    const recs=editingId!==null?findRecords(editingId):[];
     const plan=[];
     for(const p of targets){
       const o=parseOvr(form.ovr[p.id]);
       if(!o.valid)return setFormError(`Days charged${targets.length>1?` for ${p.label}`:""} must be 0 or more, in steps of 0.5.`);
       const charged=o.value!==null?o.value:auto;
       const by=getBaseYear(p,new Date(start+"T12:00:00"));
-      const rem=remDays(p,by);
+      const old=recs.find(r=>r.person.id===p.id);
+      const own=old&&old.yr===by?old.holiday.days:0;
+      const rem=remDays(p,by)+own;
       if(charged>0&&charged>rem)return setFormError(`Only ${fmt(rem)} days remaining for ${p.label} (${yearLabel(p,by)}).`);
-      plan.push({p,by,charged,manual:o.value!==null&&o.value!==auto});
+      plan.push({p,by,charged,manual:o.value!==null&&o.value!==auto,old});
     }
-    const id=Date.now();
-    for(const{p,by,charged,manual}of plan){
-      updateKey(sKey(p.id,by),{holidays:[...D(p.id,by).holidays,{id,start,end,label:label||"Holiday",days:charged,autoDays:auto,manual,startType:st,endType:et,...(person==="BOTH"?{joint:true}:{})}]});
+    const id=editingId!==null?editingId:Date.now();
+    for(const{p,by,charged,manual,old}of plan){
+      const rec={id,start,end,label:label||"Holiday",days:charged,autoDays:auto,manual,startType:st,endType:et,...(person==="BOTH"?{joint:true}:{})};
+      if(old&&old.yr===by){
+        updateKey(sKey(p.id,by),{holidays:D(p.id,by).holidays.map(h=>h.id===id?rec:h)});
+      }else{
+        if(old)updateKey(sKey(p.id,old.yr),{holidays:D(p.id,old.yr).holidays.filter(h=>h.id!==id)});
+        updateKey(sKey(p.id,by),{holidays:[...D(p.id,by).holidays,rec]});
+      }
     }
-    setForm(f=>({...f,start:"",end:"",label:"",startType:"full",endType:"full",ovr:{MK:"",SL:""}}));
+    if(editingId!==null){setEditingId(null);setForm(EMPTY_FORM);}
+    else setForm(f=>({...f,start:"",end:"",label:"",startType:"full",endType:"full",ovr:{MK:"",SL:""}}));
     setView("dashboard");
   }
 
@@ -333,7 +382,10 @@ export default function App(){
                 </div>
                 <div style={{fontSize:12,color:"#64748b"}}>{fmtDate(h.start)} – {fmtDate(h.end)} · {chargeText(per)}{hd?` · ½ day: ${hd}`:""}</div>
               </div>
-              <button onClick={()=>removeHoliday(pid,yr,h.id)} style={{background:"none",border:"1px solid #e2e8f0",borderRadius:6,padding:"4px 10px",cursor:"pointer",color:"#94a3b8",fontSize:12,flexShrink:0}}>Remove</button>
+              <div style={{display:"flex",gap:6,flexShrink:0}}>
+                <button onClick={()=>startEdit(h)} style={{background:"white",border:"1px solid #c7d2fe",borderRadius:6,padding:"4px 10px",cursor:"pointer",color:"#6366f1",fontSize:12,fontWeight:600}}>Edit</button>
+                <button onClick={()=>removeHoliday(pid,yr,h.id)} style={{background:"none",border:"1px solid #e2e8f0",borderRadius:6,padding:"4px 10px",cursor:"pointer",color:"#94a3b8",fontSize:12}}>Remove</button>
+              </div>
             </div>
           );
         })}
@@ -359,7 +411,8 @@ export default function App(){
     );
   };
 
-  const NAV=[{id:"dashboard",label:"Dashboard"},{id:"calendar",label:"Calendar"},{id:"todo",label:"📋 To-do"},{id:"add",label:"+ Holiday"},{id:"addevent",label:"+ Event"}];
+  const NAV=[{id:"dashboard",label:"Dashboard"},{id:"calendar",label:"Calendar"},{id:"todo",label:"📋 To-do"},{id:"add",label:editingId!==null?"✏️ Edit Holiday":"+ Holiday"},{id:"addevent",label:"+ Event"}];
+  const personOpts=editingId!==null?PERSON_OPTIONS.filter(p=>p.id===form.person):PERSON_OPTIONS;
 
   return(
     <div style={{fontFamily:"system-ui,sans-serif",minHeight:"100vh",background:"#f8fafc"}}>
@@ -371,7 +424,7 @@ export default function App(){
           </div>
           <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
             {NAV.map(v=>(
-              <button key={v.id} onClick={()=>setView(v.id)} style={{padding:"8px 14px",border:"none",cursor:"pointer",borderRadius:"8px 8px 0 0",background:view===v.id?"white":"rgba(255,255,255,0.15)",color:view===v.id?"#6366f1":"white",fontWeight:600,fontSize:13,whiteSpace:"nowrap"}}>
+              <button key={v.id} onClick={()=>goView(v.id)} style={{padding:"8px 14px",border:"none",cursor:"pointer",borderRadius:"8px 8px 0 0",background:view===v.id?"white":"rgba(255,255,255,0.15)",color:view===v.id?"#6366f1":"white",fontWeight:600,fontSize:13,whiteSpace:"nowrap"}}>
                 {v.label}
               </button>
             ))}
@@ -382,32 +435,40 @@ export default function App(){
       <div style={{maxWidth:900,margin:"0 auto",padding:24}}>
 
         {/* ── DASHBOARD ── */}
-        {view==="dashboard"&&(
-          <div>
-            <div style={{marginBottom:28}}>
-              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
-                <div style={{width:4,height:18,borderRadius:2,background:"#6366f1"}}/>
-                <h3 style={{margin:0,fontSize:14,fontWeight:700,color:"#6366f1"}}>MK · {beforeApril?"Current & upcoming holiday years":"Current holiday year"}</h3>
-              </div>
-              <div style={{display:"grid",gridTemplateColumns:mkYears.length>1?"1fr 1fr":"1fr",gap:16,marginBottom:14}}>
-                {mkYears.map((yr,i)=>card(mkP,yr,i>0))}
-              </div>
-              {mkYears.map(yr=>holidayList("MK",yr,"#eef2ff"))}
-              {mkYears.every(yr=>D("MK",yr).holidays.length===0)&&<p style={{margin:0,color:"#94a3b8",fontSize:13}}>No holidays added yet for MK.</p>}
-            </div>
+        {view==="dashboard"&&(()=>{
+          const off=dashYear==="next"?1:0;
+          const mkYr=mkCurYear+off,slYr=slCurYear+off;
+          const yrWord=off===1?"Next":"Current";
+          return(
             <div>
-              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
-                <div style={{width:4,height:18,borderRadius:2,background:"#ec4899"}}/>
-                <h3 style={{margin:0,fontSize:14,fontWeight:700,color:"#ec4899"}}>SL · Current & upcoming holiday years</h3>
+              {/* Year toggle */}
+              <div style={{display:"inline-flex",background:"#e2e8f0",borderRadius:10,padding:3,marginBottom:22}}>
+                {[{id:"current",label:"Current year"},{id:"next",label:"Next year"}].map(o=>(
+                  <button key={o.id} onClick={()=>setDashYear(o.id)} style={{padding:"7px 18px",border:"none",borderRadius:8,cursor:"pointer",fontWeight:600,fontSize:13,background:dashYear===o.id?"white":"transparent",color:dashYear===o.id?"#6366f1":"#64748b",boxShadow:dashYear===o.id?"0 1px 3px rgba(0,0,0,0.1)":"none"}}>{o.label}</button>
+                ))}
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:14}}>
-                {slYears.map((yr,i)=>card(slP,yr,i>0))}
+
+              <div style={{marginBottom:28}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+                  <div style={{width:4,height:18,borderRadius:2,background:"#6366f1"}}/>
+                  <h3 style={{margin:0,fontSize:14,fontWeight:700,color:"#6366f1"}}>MK · {yrWord} holiday year</h3>
+                </div>
+                <div style={{marginBottom:14}}>{card(mkP,mkYr,off===1)}</div>
+                {holidayList("MK",mkYr,"#eef2ff")}
+                {D("MK",mkYr).holidays.length===0&&<p style={{margin:0,color:"#94a3b8",fontSize:13}}>No holidays added yet for MK in this year.</p>}
               </div>
-              {slYears.map(yr=>holidayList("SL",yr,"#fdf2f8"))}
-              {slYears.every(yr=>D("SL",yr).holidays.length===0)&&<p style={{margin:0,color:"#94a3b8",fontSize:13}}>No holidays added yet for SL.</p>}
+              <div>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+                  <div style={{width:4,height:18,borderRadius:2,background:"#ec4899"}}/>
+                  <h3 style={{margin:0,fontSize:14,fontWeight:700,color:"#ec4899"}}>SL · {yrWord} holiday year</h3>
+                </div>
+                <div style={{marginBottom:14}}>{card(slP,slYr,off===1)}</div>
+                {holidayList("SL",slYr,"#fdf2f8")}
+                {D("SL",slYr).holidays.length===0&&<p style={{margin:0,color:"#94a3b8",fontSize:13}}>No holidays added yet for SL in this year.</p>}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ── CALENDAR ── */}
         {view==="calendar"&&(
@@ -529,15 +590,22 @@ export default function App(){
           );
         })()}
 
-        {/* ── ADD HOLIDAY ── */}
+        {/* ── ADD / EDIT HOLIDAY ── */}
         {view==="add"&&(
           <div style={{background:"white",borderRadius:16,padding:28,boxShadow:"0 1px 4px rgba(0,0,0,0.07)",maxWidth:520}}>
-            <h2 style={{margin:"0 0 20px",fontSize:18,fontWeight:700,color:"#1e293b"}}>Add a Holiday</h2>
+            <h2 style={{margin:"0 0 20px",fontSize:18,fontWeight:700,color:"#1e293b"}}>{editingId!==null?"Edit Holiday":"Add a Holiday"}</h2>
+
+            {editingId!==null&&(
+              <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"8px 12px",marginBottom:16,fontSize:12,color:"#1d4ed8"}}>
+                ✏️ Editing {form.person==="BOTH"?"a joint holiday — changes apply to both MK and SL":`${form.person}'s holiday`}. The person can't be changed here; remove and re-add the holiday to do that.
+              </div>
+            )}
+
             <div style={{marginBottom:16}}>
               <label style={{display:"block",fontSize:13,fontWeight:600,color:"#475569",marginBottom:6}}>Person</label>
               <div style={{display:"flex",gap:8}}>
-                {PERSON_OPTIONS.map(p=>(
-                  <button key={p.id} onClick={()=>{setFormError("");setForm(f=>({...f,person:p.id}));}} style={{flex:1,padding:"10px 0",border:`2px solid ${form.person===p.id?p.color:"#e2e8f0"}`,borderRadius:8,cursor:"pointer",fontWeight:700,fontSize:13,background:form.person===p.id?p.light:"white",color:form.person===p.id?p.color:"#94a3b8"}}>
+                {personOpts.map(p=>(
+                  <button key={p.id} onClick={()=>{setFormError("");setForm(f=>({...f,person:p.id}));}} style={{flex:1,padding:"10px 0",border:`2px solid ${form.person===p.id?p.color:"#e2e8f0"}`,borderRadius:8,cursor:editingId!==null?"default":"pointer",fontWeight:700,fontSize:13,background:form.person===p.id?p.light:"white",color:form.person===p.id?p.color:"#94a3b8"}}>
                     {p.label}
                   </button>
                 ))}
@@ -633,7 +701,15 @@ export default function App(){
               </div>
             )}
             {formError&&<div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:13,color:"#b91c1c"}}>{formError}</div>}
-            <button onClick={addHoliday} style={{width:"100%",padding:"12px 0",background:"linear-gradient(135deg,#6366f1,#ec4899)",border:"none",borderRadius:8,color:"white",fontWeight:700,fontSize:15,cursor:"pointer"}}>Add Holiday</button>
+
+            {editingId!==null?(
+              <div style={{display:"flex",gap:10}}>
+                <button onClick={cancelEdit} style={{flex:1,padding:"12px 0",background:"white",border:"1px solid #e2e8f0",borderRadius:8,color:"#64748b",fontWeight:700,fontSize:15,cursor:"pointer"}}>Cancel</button>
+                <button onClick={submitHoliday} style={{flex:2,padding:"12px 0",background:"linear-gradient(135deg,#6366f1,#ec4899)",border:"none",borderRadius:8,color:"white",fontWeight:700,fontSize:15,cursor:"pointer"}}>Save changes</button>
+              </div>
+            ):(
+              <button onClick={submitHoliday} style={{width:"100%",padding:"12px 0",background:"linear-gradient(135deg,#6366f1,#ec4899)",border:"none",borderRadius:8,color:"white",fontWeight:700,fontSize:15,cursor:"pointer"}}>Add Holiday</button>
+            )}
           </div>
         )}
 

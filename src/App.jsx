@@ -117,7 +117,7 @@ function daysUntil(ds,todayStr){return Math.round((new Date(ds+"T12:00:00")-new 
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 function loadKey(k){const r={holidays:[],carryover:0,coSet:false,initUsed:0,initSet:false};try{const v=localStorage.getItem(`hols-${k}`);if(v)r.holidays=JSON.parse(v);}catch{}try{const v=localStorage.getItem(`co-${k}`);if(v){r.carryover=JSON.parse(v);r.coSet=true;}}catch{}try{const v=localStorage.getItem(`init-${k}`);if(v){r.initUsed=JSON.parse(v);r.initSet=true;}}catch{}return r;}
-function persistKey(k,e){try{localStorage.setItem(`hols-${k}`,JSON.stringify(e.holidays));}catch{}try{if(e.coSet)localStorage.setItem(`co-${k}`,JSON.stringify(e.carryover));}catch{}try{if(e.initSet)localStorage.setItem(`init-${k}`,JSON.stringify(e.initUsed));}catch{}}
+function persistKey(k,e){try{localStorage.setItem(`hols-${k}`,JSON.stringify(e.holidays));}catch{}try{if(e.coSet)localStorage.setItem(`co-${k}`,JSON.stringify(e.carryover));else localStorage.removeItem(`co-${k}`);}catch{}try{if(e.initSet)localStorage.setItem(`init-${k}`,JSON.stringify(e.initUsed));}catch{}}
 const lsGet=(k,fb)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch{return fb;}};
 const lsSet=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch{}};
 
@@ -156,12 +156,16 @@ export default function App(){
   const D=(pid,yr)=>data[sKey(pid,yr)]||{holidays:[],carryover:0,coSet:false,initUsed:0,initSet:false};
   const bookedDays=(pid,yr)=>D(pid,yr).holidays.reduce((s,h)=>s+h.days,0);
   const usedDays=(pid,yr)=>D(pid,yr).initUsed+bookedDays(pid,yr);
+  const hasActivity=(pid,yr)=>{const d=D(pid,yr);return d.coSet||d.initSet||d.holidays.length>0;};
+  // Carry over = what's left from the previous year (including that year's own carry over),
+  // unless set manually. Future years always chain from the year before; past years only
+  // chain if they actually hold data (so the first year you use the app doesn't start at 25).
   const effectiveCO=(person,yr)=>{
     const d=D(person.id,yr);
     if(d.coSet)return d.carryover;
-    const prevD=D(person.id,yr-1);
-    const prevCO=prevD.coSet?prevD.carryover:0;
-    return Math.max(0,person.allowance+prevCO-usedDays(person.id,yr-1));
+    const prev=yr-1;
+    if(prev<getBaseYear(person,today)&&!hasActivity(person.id,prev))return 0;
+    return Math.max(0,remDays(person,prev));
   };
   const remDays=(person,yr)=>(person.allowance+effectiveCO(person,yr))-usedDays(person.id,yr);
 
@@ -346,10 +350,11 @@ export default function App(){
               <input type="number" min="0" step="0.5" max={person.allowance} value={coInput} onChange={e=>setCOInput(e.target.value)} style={{width:64,padding:"2px 6px",border:"1px solid #e2e8f0",borderRadius:6,fontSize:12}}/>
               <button onClick={()=>saveCarryover(k)} style={{padding:"2px 10px",background:person.color,color:"white",border:"none",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:600}}>Save</button>
               <button onClick={()=>setEditCO(null)} style={{padding:"2px 8px",background:"none",border:"1px solid #e2e8f0",borderRadius:6,cursor:"pointer",fontSize:12,color:"#94a3b8"}}>Cancel</button>
+              {d.coSet&&<button onClick={()=>{updateKey(k,{coSet:false,carryover:0});setEditCO(null);}} style={{background:"none",border:"none",color:"#6366f1",cursor:"pointer",fontSize:12,fontWeight:600,padding:0,textDecoration:"underline"}}>Reset to automatic</button>}
             </div>
           ):(
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{color:"#64748b"}}><span style={{fontWeight:600}}>Carry over: </span><span style={{color:person.color,fontWeight:700}}>{fmt(co)} days</span>{!d.coSet&&co>0&&<span style={{color:"#94a3b8",fontStyle:"italic",marginLeft:4}}>(projected)</span>}</div>
+              <div style={{color:"#64748b"}}><span style={{fontWeight:600}}>Carry over: </span><span style={{color:person.color,fontWeight:700}}>{fmt(co)} days</span>{d.coSet?<span style={{color:"#c2410c",fontStyle:"italic",marginLeft:4}}>(manual)</span>:(co>0&&<span style={{color:"#94a3b8",fontStyle:"italic",marginLeft:4}}>(auto: left over from previous year)</span>)}</div>
               <button onClick={()=>{setEditCO(k);setCOInput(co);setEditRem(null);}} style={{background:"none",border:"1px solid #cbd5e1",borderRadius:6,padding:"2px 8px",cursor:"pointer",color:"#64748b",fontSize:11}}>✏️ Edit</button>
             </div>
           )}
